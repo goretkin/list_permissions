@@ -43,37 +43,50 @@ def chmod_line(name_path):
 		b"\n"])
 	return line
 
-def do_it(root_path, mkdir_output_stream, chmod_output_stream):
+def do_it(root_path):
 	"""
 	root_path should be a bytes object representing a path on the system
-	"""
 	
+	returns a [(key, line)...]. The script should just be the lines, but perhaps arranged by key.
+	"""
+
+	CHMOD_RANKING = 1
+	MKDIR_RANKING = 0
+
+	commands = []
+
+	def make_chmod_command(name_path):
+		return ((CHMOD_RANKING, name_path), chmod_line(name_path))
+
+	def make_mkdir_command(dir_path):
+		line = b"".join([
+			b"mkdir -p ",
+			quote(dir_path, always_quote=True),
+			b"\n"])
+			
+		return ((MKDIR_RANKING, dir_path), line)
+
 	#it's not easy to write this as an anon. function because Python lambdas accept expressions and "raise" is a statement.
 	def raiser(x):
 		raise x
-	
+
 	# Walk through directory. Halt on error.
 	# etckeeper includes permissions of the root ".". This might be bad when root is /
 	# but for now repeat the behavior
-	chmod_output_stream.write(chmod_line(root_path))
+	commands.append(make_chmod_command(root_path))
+
 	for dir_path, dir_names, file_names in os.walk(root_path, topdown=True, onerror=raiser):
-		dir_names.sort() # descend in a sorted order. os.walk is okay with this.
-		
 		names = dir_names + file_names
 
 		if len(names) == 0:
 			# dir_path is an empty dir
-			line = b"".join([
-				b"mkdir -p ",
-				quote(dir_path, always_quote=True),
-				b"\n"])
-			mkdir_output_stream.write(line)
+			commands.append(make_mkdir_command(dir_path))
 
-		for name in sorted(names):
+		for name in names:
 			name_path = os.path.join(dir_path, name)
+			commands.append(make_chmod_command(name_path))
 
-			chmod_output_stream.write(chmod_line(name_path))
-
+	return commands
 
 if __name__=="__main__":
 	ap = argparse.ArgumentParser(
@@ -85,12 +98,11 @@ if __name__=="__main__":
 	# paths in UNIX are not encoded strings. They are bytes.
 	# Python decodes the bytes in args, 
 	root_path = os.fsencode(args.path) # https://bugs.python.org/issue8776 and PEP383
-	
+
 	sys.stdout.buffer.write(b" ".join([b"cd", quote(os.path.abspath(root_path)), b"\n"]))
-	
-	chmod_buffer = io.BytesIO()
-	do_it(root_path, sys.stdout.buffer, chmod_buffer)
-	sys.stdout.buffer.write(chmod_buffer.getvalue())
-	chmod_buffer.close()
+
+	commands = do_it(root_path)
+
+	sys.stdout.buffer.write(b"".join([line for (rank, line) in sorted(commands)]))
 
 	sys.exit()
