@@ -8,6 +8,8 @@ import argparse
 import os
 import sys
 import stat
+import pwd
+import grp
 import io
 import re
 
@@ -29,6 +31,7 @@ def quote(s, always_quote=False):
 	# the string $'b is then quoted as '$'"'"'b'
 	return b"'" + s.replace(b"'", b"'\"'\"'") + b"'"
 
+
 def chmod_line(name_path):
 	name_stat = os.stat(name_path, follow_symlinks=False)
 
@@ -43,6 +46,22 @@ def chmod_line(name_path):
 		b"\n"])
 	return line
 
+
+def chown_line(name_path):
+	name_stat = os.stat(name_path, follow_symlinks=False)
+	group_id = name_stat[stat.ST_GID]
+	user_id = name_stat[stat.ST_UID]
+	group_name = grp.getgrgid(group_id).gr_name
+	user_name = pwd.getpwuid(user_id).pw_name
+	# linux user/group names should only be ascii chars and therefore python strings
+	comment = "# {}:{}".format(user_id, group_id)
+	line = b"".join([
+		"maybe chown {}:{} ".format(user_name, group_name).encode(),
+		b" ", quote(name_path, always_quote=True),
+		b" ", comment.encode(), b"\n"])
+	return line
+
+
 def do_it(root_path):
 	"""
 	root_path should be a bytes object representing a path on the system
@@ -56,15 +75,18 @@ def do_it(root_path):
 	commands = []
 
 	def make_chmod_command(name_path):
-		return ((CHMOD_RANKING, name_path), chmod_line(name_path))
+		return ((CHMOD_RANKING, name_path, 0), chmod_line(name_path))
 
 	def make_mkdir_command(dir_path):
 		line = b"".join([
 			b"mkdir -p ",
 			quote(dir_path, always_quote=True),
 			b"\n"])
-			
-		return ((MKDIR_RANKING, dir_path), line)
+
+		return ((MKDIR_RANKING, dir_path, 0), line)
+
+	def make_chown_command(name_path):
+		return ((CHMOD_RANKING, name_path, 1), chown_line(name_path))
 
 	#it's not easy to write this as an anon. function because Python lambdas accept expressions and "raise" is a statement.
 	def raiser(x):
@@ -85,6 +107,7 @@ def do_it(root_path):
 		for name in names:
 			name_path = os.path.join(dir_path, name)
 			commands.append(make_chmod_command(name_path))
+			commands.append(make_chown_command(name_path))
 
 	return commands
 
@@ -106,3 +129,4 @@ if __name__=="__main__":
 	sys.stdout.buffer.write(b"".join([line for (rank, line) in sorted(commands)]))
 
 	sys.exit()
+
