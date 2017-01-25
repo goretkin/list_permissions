@@ -13,6 +13,8 @@ import grp
 import io
 import re
 
+import check_ignore
+
 # This path quoting stuff is from shlex.py in the Python 3 stdlib,
 # modified to work with bytes-like objects.
 # Unix paths are, on one hand, arbitrary bytes, and this script
@@ -98,6 +100,22 @@ def do_it(root_path):
 	commands.append(make_chmod_command(root_path))
 
 	for dir_path, dir_names, file_names in os.walk(root_path, topdown=True, onerror=raiser):
+
+		# by deleting names from `dir_names`, os.walk will not recurse down ignored paths.
+		for _names in [dir_names, file_names]:
+			for _name in list(_names): # make a copy, since we're mutating list
+				# if we knew there were no .git directories not corresponding with the repo whose
+				# ignore rules we want, then we could just have git_root_path == root_path
+				# and we would not need the absolute path stuff.
+				# however, that is not the case.
+
+				git_root_path = b"/"
+				ignore = check_ignore.is_path_git_ignored(
+						git_root_path,
+						os.path.abspath(os.path.join(dir_path, _name)))
+				if False and ignore:
+					_names.remove(_name)
+
 		names = dir_names + file_names
 
 		if len(names) == 0:
