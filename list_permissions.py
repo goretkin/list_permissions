@@ -12,6 +12,7 @@ import pwd
 import grp
 import io
 import re
+import logging
 
 import check_ignore
 
@@ -64,7 +65,7 @@ def chown_line(name_path):
 	return line
 
 
-def do_it(root_path):
+def do_it(root_path, logger):
 	"""
 	root_path should be a bytes object representing a path on the system
 	
@@ -99,8 +100,12 @@ def do_it(root_path):
 	# but for now repeat the behavior
 	commands.append(make_chmod_command(root_path))
 
-	for dir_path, dir_names, file_names in os.walk(root_path, topdown=True, onerror=raiser):
+	last_reported_dir_path = None # for debugging
 
+	for dir_path, dir_names, file_names in os.walk(root_path, topdown=True, onerror=raiser):
+		if not dir_path == last_reported_dir_path:
+			last_reported_dir_path == dir_path
+			logger.debug("recursing into: {}".format(dir_path.decode("utf-8", "replace")))
 		# by deleting names from `dir_names`, os.walk will not recurse down ignored paths.
 		for _names in [dir_names, file_names]:
 			for _name in list(_names): # make a copy, since we're mutating list
@@ -110,10 +115,18 @@ def do_it(root_path):
 				# however, that is not the case.
 
 				git_root_path = b"/"
+
+				# there should be a less clumbsy way to get the relpath.
+				# Probably there's no need to make an abspath to begin with.
+				# This is to avoid git bugs related to absolute pathspecs
+				path_to_check_abs = os.path.abspath(os.path.join(dir_path, _name))
+				path_to_check = os.path.relpath(path_to_check_abs, os.getcwd().encode())
 				ignore = check_ignore.is_path_git_ignored(
 						git_root_path,
-						os.path.abspath(os.path.join(dir_path, _name)))
-				if False and ignore:
+						path_to_check)
+
+				if ignore:
+					logger.debug("git says ignore: {}".format(path_to_check.decode("utf-8", "replace")))
 					_names.remove(_name)
 
 		names = dir_names + file_names
@@ -134,7 +147,18 @@ if __name__=="__main__":
 		description="List the permissions of files and folder in a directory",
 		)
 	ap.add_argument("path", type=str)
+	ap.add_argument("--log", help="log level (INFO, DEBUG, ...)")
 	args = ap.parse_args()
+
+	if args.log:
+		# assuming loglevel is bound to the string value obtained from the
+		# command line argument. Convert to upper case to allow the user to
+		# specify --log=DEBUG or --log=debug
+		numeric_level = getattr(logging, args.log.upper(), None)
+		if not isinstance(numeric_level, int):
+			raise ValueError('Invalid log level: %s' % args.log)
+		logging.basicConfig(file=sys.stderr, level=numeric_level)
+
 
 	# paths in UNIX are not encoded strings. They are bytes.
 	# Python decodes the bytes in args, 
@@ -142,7 +166,7 @@ if __name__=="__main__":
 
 	sys.stdout.buffer.write(b" ".join([b"cd", quote(os.path.abspath(root_path)), b"\n"]))
 
-	commands = do_it(root_path)
+	commands = do_it(root_path, logging)
 
 	sys.stdout.buffer.write(b"".join([line for (rank, line) in sorted(commands)]))
 

@@ -1,6 +1,9 @@
 import subprocess
+import os
 
 def is_path_git_ignored(git_root, path):
+	if os.path.isabs(path):
+		raise Warning("Prior to git-1.9.4, absolute paths are buggy.")
 	# this works even if path contains e.g. \n
 	o = subprocess.Popen(["git", "-C", git_root, "check-ignore", path], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
 	stdout, stderr = o.communicate() # close the process
