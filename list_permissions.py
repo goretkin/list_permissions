@@ -26,13 +26,26 @@ def quote(s, always_quote=False):
 	"""Return a shell-escaped version of the string *s*."""
 	if not always_quote:
 		if not s:
-			return "''"
+			return b"''"
 		if _find_unsafe(s) is None:
 			return s
 
 	# use single quotes, and put single quotes into double quotes
 	# the string $'b is then quoted as '$'"'"'b'
 	return b"'" + s.replace(b"'", b"'\"'\"'") + b"'"
+
+
+def uquote(s, always_quote=False):
+	"""Return a shell-escaped version of the string *s*."""
+	if not always_quote:
+		if not s:
+			return "''"
+		if _find_unsafe(s) is None:
+			return s
+
+	# use single quotes, and put single quotes into double quotes
+	# the string $'b is then quoted as '$'"'"'b'
+	return "'" + s.replace("'", "'\"'\"'") + "'"
 
 
 def chmod_line(name_path, name_stat):
@@ -59,6 +72,24 @@ def chown_line(name_path, name_stat):
 		"maybe chown {}:{} ".format(user_name, group_name).encode(),
 		b" ", quote(name_path, always_quote=True),
 		b" ", comment.encode(), b"\n"])
+	return line
+
+def chown_line_etckeeper_style(name_path, name_stat):
+	user_id = name_stat[stat.ST_UID]
+	user_name = pwd.getpwuid(user_id).pw_name
+	# linux user/group names should only be ascii chars and therefore python strings
+	line = b"".join([
+		"maybe chown {}".format(uquote(user_name, always_quote=True)).encode(),
+		b" ", quote(name_path, always_quote=True), b"\n"])
+	return line
+
+def chgrp_line_etckeeper_style(name_path, name_stat):
+	group_id = name_stat[stat.ST_GID]
+	group_name = grp.getgrgid(group_id).gr_name
+	# linux user/group names should only be ascii chars and therefore python strings
+	line = b"".join([
+		"maybe chgrp {}".format(uquote(group_name, always_quote=True)).encode(),
+		b" ", quote(name_path, always_quote=True), b"\n"])
 	return line
 
 
@@ -88,6 +119,12 @@ def do_it(root_path, logger):
 	def make_chown_command(name_path, name_stat):
 		return ((CHMOD_RANKING, name_path, 1), chown_line(name_path, name_stat))
 
+	def make_etckeeper_chown_command(name_path, name_stat):
+		return ((CHMOD_RANKING, name_path, -2), chown_line_etckeeper_style(name_path, name_stat))
+
+	def make_etckeeper_chgrp_command(name_path, name_stat):
+		return ((CHMOD_RANKING, name_path, -1), chgrp_line_etckeeper_style(name_path, name_stat))
+
 	#it's not easy to write this as an anon. function because Python lambdas accept expressions and "raise" is a statement.
 	def raiser(x):
 		raise x
@@ -99,6 +136,7 @@ def do_it(root_path, logger):
 
 	last_reported_dir_path = None # for debugging
 
+	# os.walk does not follow symlinks by default. Good because otherwise it could loop.
 	for dir_path, dir_names, file_names in os.walk(root_path, topdown=True, onerror=raiser):
 		if not dir_path == last_reported_dir_path:
 			last_reported_dir_path == dir_path
@@ -135,8 +173,20 @@ def do_it(root_path, logger):
 		for name in names:
 			name_path = os.path.join(dir_path, name)
 			name_stat = os.stat(name_path, follow_symlinks=False)
-			commands.append(make_chmod_command(name_path, name_stat))
-			commands.append(make_chown_command(name_path, name_stat))
+
+			if True: # compatible with etc
+				# etckeeper only lists permissions for regular files and directories.
+				if stat.S_ISREG(name_stat.st_mode) or stat.S_ISDIR(name_stat.st_mode):
+					commands.append(make_chmod_command(name_path, name_stat))
+					# etckeeper only lists users/groups if they're not equal to this script's uid/gid
+					if not name_stat[stat.ST_UID] == os.getuid():
+						commands.append(make_etckeeper_chown_command(name_path, name_stat))
+					if not name_stat[stat.ST_GID] == os.getgid():
+						commands.append(make_etckeeper_chgrp_command(name_path, name_stat))
+
+			else:
+				commands.append(make_chmod_command(name_path, name_stat))
+				commands.append(make_chown_command(name_path, name_stat))
 
 	return commands
 
