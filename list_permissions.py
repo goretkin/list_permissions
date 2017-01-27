@@ -35,9 +35,7 @@ def quote(s, always_quote=False):
 	return b"'" + s.replace(b"'", b"'\"'\"'") + b"'"
 
 
-def chmod_line(name_path):
-	name_stat = os.stat(name_path, follow_symlinks=False)
-
+def chmod_line(name_path, name_stat):
 	chmod_permissions_bits = stat.S_IMODE(name_stat.st_mode)
 	# etckeeper has four digits in its chmod output, we shall too.
 	chmod_permission_bytestring = "{:04o}".format(chmod_permissions_bits).encode()
@@ -50,8 +48,7 @@ def chmod_line(name_path):
 	return line
 
 
-def chown_line(name_path):
-	name_stat = os.stat(name_path, follow_symlinks=False)
+def chown_line(name_path, name_stat):
 	group_id = name_stat[stat.ST_GID]
 	user_id = name_stat[stat.ST_UID]
 	group_name = grp.getgrgid(group_id).gr_name
@@ -77,8 +74,8 @@ def do_it(root_path, logger):
 
 	commands = []
 
-	def make_chmod_command(name_path):
-		return ((CHMOD_RANKING, name_path, 0), chmod_line(name_path))
+	def make_chmod_command(name_path, name_stat):
+		return ((CHMOD_RANKING, name_path, 0), chmod_line(name_path, name_stat))
 
 	def make_mkdir_command(dir_path):
 		line = b"".join([
@@ -88,8 +85,8 @@ def do_it(root_path, logger):
 
 		return ((MKDIR_RANKING, dir_path, 0), line)
 
-	def make_chown_command(name_path):
-		return ((CHMOD_RANKING, name_path, 1), chown_line(name_path))
+	def make_chown_command(name_path, name_stat):
+		return ((CHMOD_RANKING, name_path, 1), chown_line(name_path, name_stat))
 
 	#it's not easy to write this as an anon. function because Python lambdas accept expressions and "raise" is a statement.
 	def raiser(x):
@@ -98,7 +95,7 @@ def do_it(root_path, logger):
 	# Walk through directory. Halt on error.
 	# etckeeper includes permissions of the root ".". This might be bad when root is /
 	# but for now repeat the behavior
-	commands.append(make_chmod_command(root_path))
+	commands.append(make_chmod_command(root_path, os.stat(root_path, follow_symlinks=False)))
 
 	last_reported_dir_path = None # for debugging
 
@@ -120,7 +117,7 @@ def do_it(root_path, logger):
 				# Probably there's no need to make an abspath to begin with.
 				# This is to avoid git bugs related to absolute pathspecs
 				path_to_check_abs = os.path.abspath(os.path.join(dir_path, _name))
-				path_to_check = os.path.relpath(path_to_check_abs, os.getcwd().encode())
+				path_to_check = os.path.relpath(path_to_check_abs, git_root_path)
 				ignore = check_ignore.is_path_git_ignored(
 						git_root_path,
 						path_to_check)
@@ -137,8 +134,9 @@ def do_it(root_path, logger):
 
 		for name in names:
 			name_path = os.path.join(dir_path, name)
-			commands.append(make_chmod_command(name_path))
-			commands.append(make_chown_command(name_path))
+			name_stat = os.stat(name_path, follow_symlinks=False)
+			commands.append(make_chmod_command(name_path, name_stat))
+			commands.append(make_chown_command(name_path, name_stat))
 
 	return commands
 
